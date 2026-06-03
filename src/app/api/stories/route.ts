@@ -58,7 +58,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { title, coverImage, textContent } = await request.json();
+    const { title, coverImage, textContent, labeledContent } = await request.json();
 
     if (!title || !coverImage || !textContent) {
       return NextResponse.json(
@@ -66,6 +66,9 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    // Text sent to TTS: use labeled version if available, otherwise raw content
+    const ttsText = labeledContent?.trim() || textContent;
 
     let audioUrl = "";
     let warning: string | undefined;
@@ -77,21 +80,38 @@ export async function POST(request: Request) {
         throw new Error("CUSTOM_TTS_API_URL is not configured");
       }
 
+      // Build TTS request body — send labeled content (with emotion tags) to TTS
+      const ttsBody = {
+        text: ttsText,
+        default_emotion: process.env.TTS_DEFAULT_EMOTION ?? "neutral",
+        temperature: parseFloat(process.env.TTS_TEMPERATURE ?? "0.6"),
+        top_k: parseInt(process.env.TTS_TOP_K ?? "30", 10),
+        silence_ms: parseInt(process.env.TTS_SILENCE_MS ?? "50", 10),
+        join_method: process.env.TTS_JOIN_METHOD ?? "ola",
+        ola_frame_ms: parseInt(process.env.TTS_OLA_FRAME_MS ?? "40", 10),
+        ola_hop_ms: parseInt(process.env.TTS_OLA_HOP_MS ?? "10", 10),
+        crossfade_ms: parseInt(process.env.TTS_CROSSFADE_MS ?? "120", 10),
+      };
+
       const ttsResponse = await fetch(ttsApiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: textContent }),
+        body: JSON.stringify(ttsBody),
       });
 
       if (!ttsResponse.ok) {
-        throw new Error(`TTS API returned ${ttsResponse.status}: ${ttsResponse.statusText}`);
+        const errText = await ttsResponse.text().catch(() => "");
+        throw new Error(
+          `TTS API returned ${ttsResponse.status}: ${ttsResponse.statusText}${errText ? ` — ${errText}` : ""}`
+        );
       }
 
       const audioArrayBuffer = await ttsResponse.arrayBuffer();
       const audioBuffer = Buffer.from(audioArrayBuffer);
 
       const slug = slugify(title) || "story";
-      const fileName = `${Date.now()}-${slug}.mp3`;
+      // VieNeu TTS returns WAV audio
+      const fileName = `${Date.now()}-${slug}.wav`;
 
       audioUrl = await uploadAudioToSupabase(audioBuffer, fileName);
     } catch (ttsError) {

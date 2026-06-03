@@ -23,7 +23,7 @@ export async function uploadAudioToSupabase(
   const { data, error } = await supabaseAdmin.storage
     .from(bucketName)
     .upload(fileName, buffer, {
-      contentType: "audio/mpeg",
+      contentType: "audio/wav",
       upsert: true,
     });
 
