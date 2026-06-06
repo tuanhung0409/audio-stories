@@ -31,6 +31,7 @@ import {
   ChevronRight,
   ChevronLeft,
   Sparkles,
+  Settings,
 } from "lucide-react";
 
 interface Story {
@@ -121,6 +122,14 @@ export default function AdminDashboardPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Settings state
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [labelingProvider, setLabelingProvider] = useState<"gemini" | "openrouter">("openrouter");
+  const [geminiKey, setGeminiKey] = useState("");
+  const [openrouterKey, setOpenrouterKey] = useState("");
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
+
   const fetchStories = useCallback(async () => {
     try {
       setError("");
@@ -137,7 +146,52 @@ export default function AdminDashboardPage() {
 
   useEffect(() => {
     fetchStories();
+    loadSettings();
   }, [fetchStories]);
+
+  const loadSettings = async () => {
+    try {
+      const res = await fetch("/api/admin/labeling-settings");
+      if (res.ok) {
+        const data = await res.json();
+        setLabelingProvider(data.provider || "openrouter");
+      }
+    } catch (err) {
+      console.error("Failed to load settings:", err);
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    setSavingSettings(true);
+    setSettingsError("");
+
+    try {
+      const apiKey = labelingProvider === "gemini" ? geminiKey : openrouterKey;
+
+      const res = await fetch("/api/admin/labeling-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: labelingProvider,
+          geminiApiKey: geminiKey || undefined,
+          openrouterApiKey: openrouterKey || undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to save settings");
+      }
+
+      setSettingsOpen(false);
+    } catch (err) {
+      setSettingsError(
+        err instanceof Error ? err.message : "Lỗi khi lưu cấu hình"
+      );
+    } finally {
+      setSavingSettings(false);
+    }
+  };
 
   const openCreateDialog = () => {
     setEditingStory(null);
@@ -181,17 +235,22 @@ export default function AdminDashboardPage() {
     setStep(2);
   };
 
-  /** Optional: call Gemini AI to label the content currently in labeledContent textarea */
+  /** Optional: call AI to label the content currently in labeledContent textarea */
   const handleLabelWithAI = async () => {
     setLabeling(true);
     setLabelError("");
 
     try {
+      const apiKey = labelingProvider === "gemini" ? geminiKey : openrouterKey;
+
       const res = await fetch("/api/label", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // Always label from the original raw text (form.textContent)
-        body: JSON.stringify({ textContent: form.textContent }),
+        body: JSON.stringify({
+          textContent: form.textContent,
+          provider: labelingProvider,
+          apiKey: apiKey || undefined,
+        }),
       });
 
       const data = await res.json();
@@ -199,7 +258,7 @@ export default function AdminDashboardPage() {
       if (!res.ok) {
         if (data?.isQuotaError) {
           throw new Error(
-            "Gemini hết quota hôm nay. Thử lại sau vài phút hoặc kích hoạt billing tại https://ai.dev/rate-limit"
+            "API đang bị giới hạn. Thử lại sau vài phút hoặc kích hoạt billing."
           );
         }
         throw new Error(data.error || "Gán nhãn thất bại");
@@ -321,13 +380,23 @@ export default function AdminDashboardPage() {
             {stories.length} truyện trong hệ thống
           </p>
         </div>
-        <Button
-          onClick={openCreateDialog}
-          className="bg-orange-500 text-white hover:bg-orange-600"
-        >
-          <Plus className="mr-1.5 h-4 w-4" />
-          Tạo truyện mới
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setSettingsOpen(true)}
+            className="border-gray-700 text-gray-300 hover:bg-gray-800 hover:text-white"
+            title="Cấu hình AI labeling"
+          >
+            <Settings className="h-4 w-4" />
+          </Button>
+          <Button
+            onClick={openCreateDialog}
+            className="bg-orange-500 text-white hover:bg-orange-600"
+          >
+            <Plus className="mr-1.5 h-4 w-4" />
+            Tạo truyện mới
+          </Button>
+        </div>
       </div>
 
       {/* Error message */}
@@ -798,6 +867,122 @@ export default function AdminDashboardPage() {
               </DialogFooter>
             </form>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Settings Dialog */}
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="border-gray-800 bg-gray-900 text-white sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-white">
+              <Settings className="h-5 w-5" />
+              Cấu hình AI Labeling
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-4 py-4">
+            {/* Provider Selection */}
+            <div className="flex flex-col gap-2">
+              <Label className="text-gray-300">Chọn AI Provider</Label>
+              <div className="flex gap-2">
+                {(["gemini", "openrouter"] as const).map((provider) => (
+                  <button
+                    key={provider}
+                    onClick={() => setLabelingProvider(provider)}
+                    className={`flex-1 rounded-lg border-2 px-3 py-2 text-sm font-medium transition-all ${
+                      labelingProvider === provider
+                        ? "border-orange-500 bg-orange-500/20 text-orange-300"
+                        : "border-gray-700 bg-gray-800 text-gray-300 hover:border-gray-600"
+                    }`}
+                  >
+                    {provider === "gemini" ? "Gemini" : "OpenRouter"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Gemini API Key */}
+            {labelingProvider === "gemini" && (
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="gemini-key" className="text-gray-300">
+                  Gemini API Key
+                </Label>
+                <Input
+                  id="gemini-key"
+                  type="password"
+                  value={geminiKey}
+                  onChange={(e) => setGeminiKey(e.target.value)}
+                  placeholder="AIzaSy..."
+                  className="border-gray-700 bg-gray-800 text-white placeholder:text-gray-500 focus-visible:border-orange-500 focus-visible:ring-orange-500/30"
+                />
+                <p className="text-xs text-gray-500">
+                  Để trống để sử dụng từ .env. Thay đổi token ở đây sẽ ghi đè .env.
+                </p>
+              </div>
+            )}
+
+            {/* OpenRouter API Key */}
+            {labelingProvider === "openrouter" && (
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="openrouter-key" className="text-gray-300">
+                  OpenRouter API Key
+                </Label>
+                <Input
+                  id="openrouter-key"
+                  type="password"
+                  value={openrouterKey}
+                  onChange={(e) => setOpenrouterKey(e.target.value)}
+                  placeholder="sk-or-..."
+                  className="border-gray-700 bg-gray-800 text-white placeholder:text-gray-500 focus-visible:border-orange-500 focus-visible:ring-orange-500/30"
+                />
+                <p className="text-xs text-gray-500">
+                  Lấy API key miễn phí tại{" "}
+                  <a
+                    href="https://openrouter.ai"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-400 hover:text-blue-300"
+                  >
+                    openrouter.ai
+                  </a>
+                </p>
+              </div>
+            )}
+
+            {/* Error */}
+            {settingsError && (
+              <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                {settingsError}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setSettingsOpen(false)}
+              className="border-gray-700 text-gray-300 hover:bg-gray-800 hover:text-white"
+            >
+              Hủy
+            </Button>
+            <Button
+              type="button"
+              onClick={handleSaveSettings}
+              disabled={savingSettings}
+              className="bg-orange-500 text-white hover:bg-orange-600"
+            >
+              {savingSettings ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Đang lưu...
+                </span>
+              ) : (
+                "Lưu cấu hình"
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
